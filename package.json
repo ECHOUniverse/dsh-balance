@@ -1,0 +1,61 @@
+{
+  "name": "@local/dsh-balance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DeepSeek 账户余额显示在 DSH 侧边栏账户行上方（客户端插件）",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24",
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "watch": "node scripts/build-client.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke-client.mjs",
+    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "esbuild": "^0.25.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "license": "MIT"
+}

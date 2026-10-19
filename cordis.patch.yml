@@ -1,0 +1,16 @@
+# @local/dsh-balance bundle patch: mounts the balance row into a dsh profile.
+# The Host half declares the volatile configuration schema; the client half
+# (lib/client.js) renders the row above the sidebar account row and owns every
+# refresh trigger.
+#
+# Install: dsh plugin --profile <name> add @local/dsh-balance
+# Local:   dsh plugin --profile <name> add link:/path/to/deepseekcredit-dsh
+- insert:
+    - id: balance
+      # Quoted because `@` is a reserved YAML indicator.
+      name: '@local/dsh-balance'
+      config:
+        pollingEnabled: true
+        pollingIntervalMs: 60000
+        warnThresholdCny: 10
+        dangerThresholdCny: 1

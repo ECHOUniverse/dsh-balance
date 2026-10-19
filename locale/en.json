@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DeepSeek Balance",
+    "description": "Shows the DeepSeek account balance above the sidebar account row; click to refresh, hover for per-currency details."
+  }
+}

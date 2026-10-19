@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DeepSeek 余额",
+    "description": "在侧边栏账户行上方显示 DeepSeek 账户余额，点击可立即刷新，悬停查看分币种明细。"
+  }
+}
