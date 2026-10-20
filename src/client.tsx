@@ -6,81 +6,37 @@
  * footer), and the row's configuration page (`plugins.row.config`).
  *
  * Data comes from `ctx.remote.account.getBalance`; the tooltip's destinations
- * come from `ctx.remote.account.getState().links`. Refresh triggers:
+ * come from `ctx.remote.account.getState().links`. Every trigger is owned by the
+ * **plugin lifecycle** (`ctx.effect(() => controller.attach())`), never by the
+ * row component, so collapsing the sidebar cannot stop refreshing:
  *
- * - one read on mount (after rendering the cached snapshot, if any);
+ * - a startup read as soon as the plugin activates, retried at 1 s / 2 s / 4 s
+ *   (at most three times) until a ready snapshot arrives;
  * - window focus, throttled to one read per 20 seconds;
  * - every `api-session/status` transition from running to idle;
  * - the fallback poll while polling is enabled and the page is visible;
- * - a click on the row, which always queues a read.
+ * - a click on the row, which always queues a read;
+ * - account stream frames, so a sign-in or sign-out refreshes the value.
  *
  * All triggers share one in-flight read plus at most one queued follow-up, and
- * every client read has an 8 second timeout. Failures are never retried
- * automatically; the previous value stays on screen with a warning marker.
+ * every client read has an 8 second timeout. Only the startup read retries;
+ * other failures keep the previous value on screen with a warning marker.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { currencySymbol, mergeWallets, normalizeWalletSet, primaryCurrency, type WalletSet } from './balance'
-import { browserStorage, readCache, writeCache, type KeyValueStorage } from './cache'
+import { currencySymbol, mergeWallets, primaryCurrency } from './balance'
+import { BalanceController, readConfig } from './controller'
+import { NAMESPACE, PACKAGE_NAME, ROW_CONFIG_KEY, ROW_ID, STYLE_ID, TOOLTIP_ID } from './constants'
 import { formatAmount } from './format'
 import { en, zh } from './locales'
 import { createSettingsPage } from './settings-page'
-import { DEFAULT_SETTINGS, normalizeSettings, type BalanceSettings } from './settings'
+import type { BalanceSettings } from './settings'
 import { displayLevel, type ThresholdLevel } from './threshold'
 import { absoluteTime, relativeTime } from './time'
-import type {
-  AccountClientMeta,
-  AccountState,
-  BalanceResult,
-  ClientContext,
-  RemoteResult,
-  Translate,
-} from './types'
+import type { ClientContext, Translate } from './types'
 
-/** Package identity; also the lazy factory id in the browser module table. */
-const PACKAGE_NAME = '@local/dsh-balance'
-/** Row id inside the profile composition; the config namespace is keyed by it. */
-const ROW_ID = 'balance'
-/** Locale namespace owned by this bundle. */
-const NAMESPACE = 'balance'
-/** Row configuration slot key: `<package>#<row id>`. */
-const ROW_CONFIG_KEY = PACKAGE_NAME + '#' + ROW_ID
-/** Client version sent with account requests; matches the DSH desktop build. */
-const CLIENT_VERSION = '0.2.1-rc.2'
-/** Client-side read timeout. */
-const REQUEST_TIMEOUT_MS = 8000
-/** Focus-triggered reads are skipped inside this window. */
-const FOCUS_THROTTLE_MS = 20000
 /** How often the tooltip's relative time is recomputed while open. */
 const RELATIVE_TIME_REFRESH_MS = 30000
-/** Style tag identity for the injected sheet. */
-const STYLE_ID = PACKAGE_NAME + '/balance.css'
-/** Tooltip element id, referenced by `aria-describedby`. */
-const TOOLTIP_ID = 'dsh-balance-tooltip'
-
-/** Destinations taken from the account state. */
-interface AccountLinks {
-  usageUrl?: string
-  topUpUrl?: string
-}
-
-/** Everything the row renders from. */
-interface RowSnapshot {
-  /** Latest wallet snapshot, `null` when signed out or never read. */
-  wallets: WalletSet | null
-  /** Epoch milliseconds of the read that produced `wallets`. */
-  fetchedAt: number | null
-  /** Whether the Host reports no signed-in account. */
-  signedOut: boolean
-  /** Last failure description, or `null`. */
-  error: string | null
-  /** Whether a read is in flight. */
-  refreshing: boolean
-  /** Whether any read or cache restore has completed. */
-  initialized: boolean
-  /** Platform destinations for the tooltip actions. */
-  links: AccountLinks
-}
 
 /** Styles, injected once per application through `ctx.effect`. */
 const CSS =
@@ -112,28 +68,6 @@ const CSS =
   '.dshBalanceTooltipButton:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}' +
   '.dshBalanceTooltipButton:disabled{color:var(--dsw-alias-label-tertiary);border-color:var(--dsw-alias-border-l2);cursor:default}'
 
-/** Extract a human-readable failure description from a Remote error or thrown value. */
-function describeFailure(value: unknown): string {
-  if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
-  if (typeof value === 'object') {
-    const candidate = value as { message?: unknown }
-    if (typeof candidate.message === 'string' && candidate.message !== '') return candidate.message
-  }
-  return ''
-}
-
-/** Read the live plugin configuration, falling back to defaults when unserved. */
-function readConfig(ctx: ClientContext): BalanceSettings {
-  try {
-    const form = ctx.configForms.get(ROW_ID)
-    const snapshot = typeof form?.getSnapshot === 'function' ? form.getSnapshot() : undefined
-    return normalizeSettings(snapshot?.value)
-  } catch {
-    return DEFAULT_SETTINGS
-  }
-}
-
 /** Inject the row stylesheet once; returns its removal cleanup. */
 function installStyles(): () => void {
   if (typeof document === 'undefined') return () => {}
@@ -146,308 +80,6 @@ function installStyles(): () => void {
   document.head.appendChild(tag)
   return () => {
     tag.remove()
-  }
-}
-
-/**
- * Balance state and refresh scheduling for the sidebar row.
- *
- * The controller owns every trigger, timer and Remote subscription; the React
- * row only reads its snapshot and asks for forced refreshes.
- */
-class BalanceController {
-  private ctx: ClientContext
-  private listeners = new Set<() => void>()
-  private snapshot: RowSnapshot
-  private attached = false
-  private disposed = false
-  private inFlight = false
-  private pending = false
-  private lastRequestAt = 0
-  private pollTimer: ReturnType<typeof setTimeout> | undefined
-  private cleanupStack: (() => void)[] = []
-  private runningSessions = new Set<string>()
-
-  constructor(ctx: ClientContext) {
-    this.ctx = ctx
-    const cached = readCache(this.storage())
-    this.snapshot = {
-      wallets: cached?.wallets ?? null,
-      fetchedAt: cached?.fetchedAt ?? null,
-      signedOut: false,
-      error: null,
-      refreshing: false,
-      initialized: cached !== undefined,
-      links: {},
-    }
-  }
-
-  /** Subscribe to snapshot replacements. */
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
-    }
-  }
-
-  /** Current snapshot (stable between mutations). */
-  getSnapshot = (): RowSnapshot => this.snapshot
-
-  /** Force a read, still sharing the in-flight/queued slot. */
-  refreshNow(): void {
-    this.request('manual')
-  }
-
-  /** Start triggers; returns the detach cleanup for the mounted row. */
-  attach(): () => void {
-    if (this.disposed || this.attached) return () => {}
-    this.attached = true
-    if (typeof window !== 'undefined') {
-      const onFocus = (): void => this.request('focus')
-      window.addEventListener('focus', onFocus)
-      this.cleanupStack.push(() => window.removeEventListener('focus', onFocus))
-    }
-    if (typeof document !== 'undefined') {
-      const onVisibility = (): void => {
-        if (document.visibilityState !== 'visible') return
-        const settings = readConfig(this.ctx)
-        if (!settings.pollingEnabled) return
-        if (Date.now() - this.lastRequestAt < settings.pollingIntervalMs) return
-        this.request('visibility')
-      }
-      document.addEventListener('visibilitychange', onVisibility)
-      this.cleanupStack.push(() => document.removeEventListener('visibilitychange', onVisibility))
-    }
-    try {
-      const off = this.ctx.remote.$on('api-session/status', (sessionId: string, running: boolean) => {
-        if (running === true) {
-          this.runningSessions.add(sessionId)
-          return
-        }
-        if (this.runningSessions.delete(sessionId)) this.request('turn')
-      })
-      if (typeof off === 'function') this.cleanupStack.push(off)
-    } catch {
-      /* a deployment without forwarded session status simply polls */
-    }
-    this.openAccountStream()
-    this.schedulePoll()
-    this.request('mount')
-    return () => this.detach()
-  }
-
-  /** Stop triggers and timers; state and cache survive. */
-  detach(): void {
-    this.attached = false
-    for (const cleanup of this.cleanupStack.splice(0)) {
-      try {
-        cleanup()
-      } catch {
-        /* cleanup is best effort */
-      }
-    }
-    this.stopPoll()
-  }
-
-  /** Release everything; called when the plugin unloads. */
-  dispose(): void {
-    this.disposed = true
-    this.detach()
-    this.listeners.clear()
-  }
-
-  /** localStorage when available. */
-  private storage(): KeyValueStorage | undefined {
-    return browserStorage()
-  }
-
-  /** Identity of this client for account requests. */
-  private clientMeta(): AccountClientMeta {
-    let locale = 'zh-CN'
-    try {
-      const active = this.ctx.locale.getSnapshot()?.active
-      if (typeof active === 'string' && active !== '') locale = active
-    } catch {
-      /* keep the default */
-    }
-    return {
-      version: CLIENT_VERSION,
-      locale,
-      timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
-    }
-  }
-
-  /** Publish a partial snapshot. */
-  private update(patch: Partial<RowSnapshot>): void {
-    this.snapshot = { ...this.snapshot, ...patch }
-    for (const listener of this.listeners) listener()
-  }
-
-  /**
-   * Request one balance read.
-   *
-   * @param reason - trigger identity; only `focus` is throttled.
-   */
-  private request(reason: string): void {
-    if (this.disposed) return
-    if (this.inFlight) {
-      this.pending = true
-      return
-    }
-    const now = Date.now()
-    if (reason === 'focus' && now - this.lastRequestAt < FOCUS_THROTTLE_MS) return
-    this.lastRequestAt = now
-    this.inFlight = true
-    if (this.snapshot.initialized) this.update({ refreshing: true })
-    void this.fetchOnce().finally(() => {
-      this.inFlight = false
-      const rerun = this.pending
-      this.pending = false
-      if (this.disposed) return
-      this.update({ refreshing: false, initialized: true })
-      if (rerun) this.request('queued')
-    })
-  }
-
-  /** Execute one balance + account-state read under the client timeout. */
-  private async fetchOnce(): Promise<void> {
-    const remote = this.ctx.remote
-    const meta = this.clientMeta()
-    const [stateSettlement, balanceSettlement] = await Promise.allSettled([
-      this.withTimeout(
-        Promise.resolve().then(() =>
-          typeof remote.account.getState === 'function' ? remote.account.getState() : undefined,
-        ),
-      ),
-      this.withTimeout(Promise.resolve().then(() => remote.account.getBalance(meta))),
-    ])
-    if (this.disposed) return
-    if (stateSettlement.status === 'fulfilled') this.applyAccountValue(stateSettlement.value)
-    if (balanceSettlement.status === 'rejected') {
-      this.update({ error: describeFailure(balanceSettlement.reason) || 'request failed' })
-      return
-    }
-    const result = balanceSettlement.value as RemoteResult<BalanceResult> | undefined
-    if (result === undefined || result === null || result.ok !== true) {
-      const failure = result as { error?: unknown } | undefined
-      this.update({ error: describeFailure(failure?.error) || describeFailure(result) || 'request failed' })
-      return
-    }
-    const value = result.value
-    if (value === null) {
-      this.update({ wallets: null, signedOut: true, error: null })
-      return
-    }
-    if (value.status === 'ready') {
-      const wallets = normalizeWalletSet(value)
-      const fetchedAt = Date.now()
-      this.update({ wallets, fetchedAt, signedOut: false, error: null })
-      if (wallets !== null) writeCache(this.storage(), { wallets, fetchedAt })
-      return
-    }
-    this.update({ signedOut: false, error: 'failed' })
-  }
-
-  /** Accept either a Remote result envelope or a raw account state value. */
-  private applyAccountValue(value: unknown): void {
-    let state: AccountState | undefined
-    if (value !== null && typeof value === 'object') {
-      const envelope = value as { ok?: unknown; value?: unknown; links?: unknown; status?: unknown }
-      if (envelope.ok === true && envelope.value !== null && typeof envelope.value === 'object') {
-        state = envelope.value as AccountState
-      } else if (envelope.links !== undefined || envelope.status !== undefined) {
-        state = value as AccountState
-      }
-    }
-    if (state === undefined) return
-    const links = state.links
-    if (links === null || typeof links !== 'object') return
-    const usageUrl = typeof links.usageUrl === 'string' ? links.usageUrl : undefined
-    const topUpUrl = typeof links.topUpUrl === 'string' ? links.topUpUrl : undefined
-    if (usageUrl !== this.snapshot.links.usageUrl || topUpUrl !== this.snapshot.links.topUpUrl) {
-      this.update({ links: { usageUrl, topUpUrl } })
-    }
-  }
-
-  /** Follow the account stream so a sign-in/out triggers a fresh read. */
-  private openAccountStream(): void {
-    const remote = this.ctx.remote
-    if (typeof remote.$stream !== 'function' || typeof remote.account?.watch !== 'function') return
-    try {
-      const stream = remote.$stream({
-        name: 'DeepSeek balance account stream',
-        open: (signal: AbortSignal) => remote.account.watch(signal),
-        ended: () => new Error('DeepSeek balance account stream ended'),
-      })
-      this.cleanupStack.push(() => {
-        void stream.dispose().catch(() => {})
-      })
-      void (async () => {
-        try {
-          for await (const frame of stream as AsyncIterable<{ value?: unknown; accept?: () => void }>) {
-            if (this.disposed || !this.attached) return
-            this.applyAccountValue(frame?.value)
-            try {
-              frame?.accept?.()
-            } catch {
-              /* accepting is the stream's business */
-            }
-            this.request('account')
-          }
-        } catch {
-          /* the poll keeps the value fresh when the stream is unavailable */
-        }
-      })()
-    } catch {
-      /* no account stream in this deployment */
-    }
-  }
-
-  /** (Re)schedule the fallback poll using the live interval. */
-  private schedulePoll(): void {
-    this.stopPoll()
-    if (this.disposed || !this.attached) return
-    const { pollingIntervalMs } = readConfig(this.ctx)
-    this.pollTimer = setTimeout(() => {
-      this.pollTimer = undefined
-      try {
-        const settings = readConfig(this.ctx)
-        if (
-          this.attached &&
-          settings.pollingEnabled &&
-          typeof document !== 'undefined' &&
-          document.visibilityState === 'visible'
-        ) {
-          this.request('poll')
-        }
-      } finally {
-        this.schedulePoll()
-      }
-    }, pollingIntervalMs)
-  }
-
-  /** Cancel the pending poll. */
-  private stopPoll(): void {
-    if (this.pollTimer === undefined) return
-    clearTimeout(this.pollTimer)
-    this.pollTimer = undefined
-  }
-
-  /** Race one request against the client timeout. */
-  private withTimeout<T>(promise: Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('timeout')), REQUEST_TIMEOUT_MS)
-      promise.then(
-        (value) => {
-          clearTimeout(timer)
-          resolve(value)
-        },
-        (error) => {
-          clearTimeout(timer)
-          reject(error)
-        },
-      )
-    })
   }
 }
 
@@ -780,6 +412,9 @@ export function apply(ctx: ClientContext): void {
 
   const controller = new BalanceController(ctx)
   ctx.effect(() => () => controller.dispose(), 'balance: controller')
+  // Triggers belong to the plugin, not the row: a collapsed sidebar unmounts the
+  // row but polling, focus refresh and turn-end refresh must keep running.
+  ctx.effect(() => controller.attach(), 'balance: triggers')
 
   const BalanceRow = createBalanceRow(controller, ctx)
   const SettingsPage = createSettingsPage(ctx, translate)

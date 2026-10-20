@@ -43,15 +43,17 @@ DSH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
 
 ## 刷新策略
 
-所有触发共享「在途合并」：正在请求时不重复发，最多记录一次待补请求；每次客户端请求 8 秒超时，失败不自动重试（等下一次触发）。
+所有触发器都由**插件生命周期**持有（`apply()` 中的 `ctx.effect(() => controller.attach())`），不随行组件的挂载/卸载变化；因此收起侧边栏（行被卸载）后，自动刷新仍会继续（见 [ADR 0001](docs/adr/0001-refresh-triggers-belong-to-plugin-lifecycle.md)）。
+
+所有触发共享「在途合并」：正在请求时不重复发，最多记录一次待补请求；每次客户端请求 8 秒超时。失败不自动重试，**唯一例外是启动刷新**：插件激活后的那次读取若未拿到 `ready`（含未登录 `null`、`failed`、`ok:false`、超时），会按 1s / 2s / 4s 重试，最多 3 次；任一来源拿到 `ready`（含点击刷新）立即取消剩余重试。
 
 | 触发 | 行为 |
 | --- | --- |
-| 插件挂载 | 先渲染 localStorage 缓存，再查一次。 |
+| **启动刷新（插件激活）** | 立即查一次；有缓存先渲染缓存值 + 灰点，无缓存显示「…」。非 ready 时按 **1s / 2s / 4s** 重试，**最多 3 次**（即最晚约 7 秒更新）；拿到 ready 立即停止，重试序列期间保持灰点。其他触发不重试。 |
 | `window` focus | 距上次请求 < 20 秒跳过，否则查（节流只作用于该路径）。 |
 | `api-session/status` running → false | 必查，不节流。 |
 | 兜底轮询 | `pollingEnabled` 且 `document.visibilityState === 'visible'` 时每 `pollingIntervalMs` 查一次；页面隐藏期间暂停，重新可见时距上次超过间隔则补查。 |
-| 点击行 | 立即强制刷新（绕过节流）。 |
+| 点击行 | 立即强制刷新（绕过节流）；成功后取消排队中的启动重试。 |
 | 账号登录态变化 | `ctx.remote.account.watch(signal)` 的帧触发一次查询。 |
 
 缓存键：`@local/dsh-balance/cache/v1`，内容为 `{ wallets: { value, bonusWallets }, fetchedAt }`，不过期；冷启动先显示缓存值与相对时间，再后台刷新覆盖。
@@ -66,13 +68,14 @@ DSH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
 ## 验收清单
 
 1. 重启 DSH 后，侧边栏底部账户行（头像 + 昵称）**正上方**出现钱包图标 + 金额一行。
-2. 收起侧边栏（`wide === false`）时该行隐藏。
+2. 收起侧边栏（`wide === false`）时该行隐藏；收起期间自动刷新仍在后台继续。
 3. 鼠标悬停或键盘聚焦该行时，body 上的自定义浮层显示分币种总额/充值/赠金、相对更新时间（悬停时间显示绝对时间）以及「用量」「充值」按钮。
 4. 按 Enter/Space 或鼠标点击该行，金额区域出现极淡灰点表示刷新中，数值不闪烁。
-5. CNY 合计低于 10 显示橙色，低于 1 显示红色；USD 金额保持默认颜色；明暗主题均清晰。
-6. 未登录时显示灰色「账户未登录」；读取失败且有旧值时保留旧值并显示灰色 ⚠，浮层给出失败原因。
-7. 插件管理页中该插件显示「DeepSeek 余额」、说明与线性钱包图标；配置页可改 4 项并即时生效（下一次轮询/刷新可见）。
-8. 完全退出并重启 DSH 后配置与显示仍正常。
+5. **启动后无需点击，1–7 秒内余额自动出现/更新**（启动刷新 + 1s/2s/4s×3 重试）。
+6. CNY 合计低于 10 显示橙色，低于 1 显示红色；USD 金额保持默认颜色；明暗主题均清晰。
+7. 未登录时显示灰色「账户未登录」；读取失败且有旧值时保留旧值并显示灰色 ⚠，浮层给出失败原因。
+8. 插件管理页中该插件显示「DeepSeek 余额」、说明与线性钱包图标；配置页可改 4 项并即时生效（下一次轮询/刷新可见）。
+9. 完全退出并重启 DSH 后配置与显示仍正常。
 
 ## 已知风险 / 限制
 
@@ -117,7 +120,10 @@ window.__ModuleLoader__.load({
 | 路径 | 说明 |
 | --- | --- |
 | `index.js` | Host 半：插件 id 与 `Config`（volatile）声明。 |
-| `src/client.tsx` | 客户端入口：插槽注册、余额状态机、刷新调度、行组件。 |
+| `src/client.tsx` | 客户端入口：插槽注册、行组件、`apply()`（通过 `ctx.effect` 挂载触发器）。 |
+| `src/controller.ts` | 余额状态机与刷新调度：触发源、启动重试、在途合并、轮询、账号流、缓存。 |
+| `src/startup-retry.ts` | 启动重试计划（1s/2s/4s，最多 3 次，ready 取消）的可测纯逻辑。 |
+| `src/constants.ts` | 包名/行 id/插槽 key/超时与节流常量。 |
 | `src/settings-page.tsx` | `plugins.row.config` 配置页（4 项，写入 `configForms`）。 |
 | `src/format.ts` | 与宿主一致的金额格式化/精确十进制运算。 |
 | `src/balance.ts` | 钱包合并、主币种选择。 |
