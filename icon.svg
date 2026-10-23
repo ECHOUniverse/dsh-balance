@@ -1,7 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect x="5" y="22" width="40" height="34" rx="8" stroke="#4d6bfe" stroke-width="4"/>
-  <path d="M45 30h7a5 5 0 0 1 5 5v8a5 5 0 0 1-5 5h-7" stroke="#4d6bfe" stroke-width="4" stroke-linejoin="round"/>
-  <circle cx="50" cy="39" r="2.6" fill="#4d6bfe"/>
-  <circle cx="46" cy="15" r="9" stroke="#4d6bfe" stroke-width="4"/>
-  <path d="M42.8 12.6 46 16l3.2-3.4M43.2 16.6h5.6M43.2 19.8h5.6M46 16.4v4.4" stroke="#4d6bfe" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(18 18.4) scale(0.85) translate(-18 -18)">
+    <rect x="7.5" y="10.5" width="21.5" height="17" rx="3" fill="#7CB7FF" fill-opacity="0.5" />
+    <rect x="5.5" y="13.5" width="21.5" height="16" rx="3" fill="url(#balance-wallet)" />
+    <rect x="20.5" y="19.25" width="6.5" height="4.5" rx="2.25" fill="#FFFFFF" fill-opacity="0.92" />
+    <circle cx="23.75" cy="21.5" r="1.6" fill="#3E58D6" />
+    <circle cx="25.5" cy="11.5" r="6.5" fill="url(#balance-coin)" />
+    <path d="M22.9 9.2 25.5 11.8 28.1 9.2M25.5 11.8V16.1M23.15 12.9H27.85M23.15 14.9H27.85" stroke="#3E58D6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+  <defs>
+    <linearGradient id="balance-wallet" x1="9" y1="13.5" x2="20" y2="29.5" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6FB2EE" />
+      <stop offset="1" stop-color="#3E58D6" />
+    </linearGradient>
+    <linearGradient id="balance-coin" x1="21" y1="6" x2="30" y2="17" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD08A" />
+      <stop offset="1" stop-color="#F2A34F" />
+    </linearGradient>
+  </defs>
 </svg>

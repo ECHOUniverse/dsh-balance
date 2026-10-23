@@ -40,11 +40,11 @@ const RELATIVE_TIME_REFRESH_MS = 30000
 
 /** Styles, injected once per application through `ctx.effect`. */
 const CSS =
-  '.dshBalanceRow{box-sizing:border-box;display:flex;align-items:center;gap:8px;height:44px;width:100%;min-width:0;flex:1 0 100%;margin:0;padding:6px;border:0;border-radius:var(--dsw-radius-md);background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:18px;cursor:pointer;text-align:left;overflow:hidden}' +
+  '.dshBalanceRow{box-sizing:border-box;display:flex;align-items:center;gap:8px;height:44px;width:calc(100% + 4px);min-width:0;flex:0 0 auto;margin:0 -2px;padding:6px;border:0;border-radius:var(--dsw-radius-md);background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:18px;cursor:pointer;text-align:left;overflow:hidden}' +
   '.dshBalanceRow:hover{background:var(--dsw-alias-interactive-bg-hover)}' +
   '.dshBalanceRow:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}' +
   '.dshBalanceIcon{flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}' +
-  '.dshBalanceAmount{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}' +
+  '.dshBalanceAmount{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}' +
   '.dshBalanceAmount[data-level="warn"]{color:#f59e0b}' +
   '.dshBalanceAmount[data-level="danger"]{color:#ef4444}' +
   '[data-ds-dark-theme] .dshBalanceAmount[data-level="warn"]{color:#fbbf24}' +
@@ -110,13 +110,13 @@ function useSettings(ctx: ClientContext): BalanceSettings {
   return settings
 }
 
-/** Inline coin/wallet glyph used at 16px. */
+/** Inline coin/wallet glyph used at 24px. */
 function BalanceIcon(): JSX.Element {
   return (
     <svg
       viewBox="0 0 16 16"
-      width="16"
-      height="16"
+      width="24"
+      height="24"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.25"
