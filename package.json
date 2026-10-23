@@ -3,6 +3,21 @@
   "version": "0.1.1",
   "private": true,
   "description": "DeepSeek 账户余额显示在 DSH 侧边栏账户行上方（客户端插件）",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ECHOUniverse/dsh-balance.git"
+  },
+  "homepage": "https://github.com/ECHOUniverse/dsh-balance#readme",
+  "bugs": {
+    "url": "https://github.com/ECHOUniverse/dsh-balance/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "balance",
+    "sidebar"
+  ],
   "type": "module",
   "main": "index.js",
   "exports": {
